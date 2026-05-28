@@ -188,9 +188,10 @@ class Worker:
 
         Phase 1 supports two source layouts:
           1. NPY: pre-baked uint16 frame array — fastest, no PIL needed
-          2. PNG: 720×720 RGB — decoded inline; matches what CC server's
-             imageloader builds via Qt's QImage. We accept anything PIL
-             can open and let cornea_rax720 fail loudly if shape is wrong.
+          2. PNG: 720×720 RGB — decoded inline, then converted to the BGR
+             layout that write_rj1_frame expects when opencv_frame=True.
+             We accept anything PIL can open and let cornea_rax720 fail
+             loudly if shape is wrong.
         """
         c = self._require()
         path = str(args["path"])
@@ -198,6 +199,7 @@ class Worker:
             raise FileNotFoundError(f"image not found: {path}")
 
         ext = Path(path).suffix.lower()
+        write_kwargs = {}
         if ext == ".npy":
             import numpy as np
             frame = np.load(path)
@@ -205,12 +207,15 @@ class Worker:
             from PIL import Image  # pillow is in station_venv already
             import numpy as np
             img = Image.open(path).convert("RGB")
-            frame = np.array(img)
+            # Keep the subprocess path aligned with PythonBridge::qimageToPyArray:
+            # Qt/PIL RGB images are handed to rax_lib as OpenCV-style BGR.
+            frame = np.array(img)[:, :, ::-1].copy()
+            write_kwargs["opencv_frame"] = True
         else:
             raise ValueError(f"unsupported image extension: {ext}")
 
         t0 = time.monotonic()
-        ok_ = c.write_rj1_frame(frame)
+        ok_ = c.write_rj1_frame(frame, **write_kwargs)
         dt_ms = int((time.monotonic() - t0) * 1000)
         return {"ok": bool(ok_), "duration_ms": dt_ms, "shape": list(frame.shape)}
 
